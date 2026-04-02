@@ -50,14 +50,22 @@ def upload_to_gcs_and_load_bq(csv_path):
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     blob_name = f"backfill/{DATA_TYPE}_{timestamp}.csv"
     
-    # Shift-JISをUTF-8に変換
+    # Shift-JISをUTF-8に変換し、ヘッダーをBQ互換に修正
+    import re
     utf8_path = csv_path + ".utf8.csv"
     try:
         with open(csv_path, 'r', encoding='cp932') as f_in:
-            with open(utf8_path, 'w', encoding='utf-8', newline='') as f_out:
-                f_out.write(f_in.read())
+            lines = f_in.readlines()
     except UnicodeDecodeError:
-        utf8_path = csv_path  # 既にUTF-8の場合そのまま使う
+        with open(csv_path, 'r', encoding='utf-8') as f_in:
+            lines = f_in.readlines()
+    
+    if lines:
+        # ヘッダー行の/をBQ互換の_に置換
+        lines[0] = lines[0].replace('/', '_')
+    
+    with open(utf8_path, 'w', encoding='utf-8', newline='') as f_out:
+        f_out.writelines(lines)
     
     print(f"GCSにアップロード中: gs://{BUCKET_NAME}/{blob_name}")
     storage_client = storage.Client(project=PROJECT_ID, credentials=creds)
