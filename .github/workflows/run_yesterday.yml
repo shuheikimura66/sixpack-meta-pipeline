@@ -1,0 +1,43 @@
+name: Scrape Yesterday MCV & CV (Fixed)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  scrape-mcv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install selenium webdriver-manager google-api-python-client google-auth
+      - name: Run MCV scraper (yesterday)
+        env:
+          USER_ID: ${{ secrets.USER_ID }}
+          USER_PASS: ${{ secrets.USER_PASS }}
+          GCP_JSON: ${{ secrets.GCP_JSON }}
+          TARGET_URL: ${{ secrets.MCV_TARGET_URL }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          PARTNER_NAME: ${{ secrets.PARTNER_NAME }}
+        run: python scraper/mcv_main.py yesterday
+
+  scrape-cv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install selenium webdriver-manager google-api-python-client google-auth
+      - name: Run CV scraper (yesterday)
+        env:
+          USER_ID: ${{ secrets.USER_ID }}
+          USER_PASS: ${{ secrets.USER_PASS }}
+          GCP_JSON: ${{ secrets.GCP_JSON }}
+          TARGET_URL: ${{ secrets.CV_TARGET_URL }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          PARTNER_NAME: ${{ secrets.PARTNER_NAME }}
+        run: python scraper/cv_main.py yesterday
