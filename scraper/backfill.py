@@ -61,8 +61,21 @@ def upload_to_gcs_and_load_bq(csv_path):
             lines = f_in.readlines()
     
     if lines:
-        # ヘッダー行の/をBQ互換の_に置換
-        lines[0] = lines[0].replace('/', '_')
+        # ヘッダー行のBQ非対応文字を_に置換
+        import re
+        header = lines[0]
+        header = header.replace('/', '_')
+        header = header.replace('(', '_')
+        header = header.replace(')', '_')
+        header = header.replace(' ', '_')
+        header = header.replace('-', '_')
+        header = header.replace('.', '_')
+        # 連続する_を1つに
+        header = re.sub(r'_+', '_', header)
+        # 末尾の_を除去
+        header = re.sub(r'_"', '"', header)
+        header = re.sub(r'_,', ',', header)
+        lines[0] = header
     
     with open(utf8_path, 'w', encoding='utf-8', newline='') as f_out:
         f_out.writelines(lines)
