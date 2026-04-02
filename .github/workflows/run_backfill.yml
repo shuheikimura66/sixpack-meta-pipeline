@@ -11,7 +11,7 @@ on:
         description: 'Start date (e.g. 2026年01月01日)'
         required: true
       end_date:
-        description: 'End date (e.g. 2026年04月01日)'
+        description: 'End date (e.g. 2026年01月31日)'
         required: true
 
 jobs:
@@ -25,18 +25,23 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install selenium webdriver-manager google-api-python-client google-auth
-      - name: Run backfill
+      - name: Run MCV backfill
+        if: ${{ inputs.data_type == 'mcv' }}
         env:
           USER_ID: ${{ secrets.USER_ID }}
           USER_PASS: ${{ secrets.USER_PASS }}
           GCP_JSON: ${{ secrets.GCP_JSON }}
+          TARGET_URL: ${{ secrets.MCV_TARGET_URL }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           PARTNER_NAME: ${{ secrets.PARTNER_NAME }}
-        run: |
-          if [ "${{ inputs.data_type }}" = "mcv" ]; then
-            TARGET_URL="${{ secrets.MCV_TARGET_URL }}"
-          else
-            TARGET_URL="${{ secrets.CV_TARGET_URL }}"
-          fi
-          export TARGET_URL
-          python scraper/backfill.py "${{ inputs.data_type }}" "$TARGET_URL" "${{ inputs.start_date }}" "${{ inputs.end_date }}"
+        run: python scraper/backfill.py mcv "${{ inputs.start_date }}" "${{ inputs.end_date }}"
+      - name: Run CV backfill
+        if: ${{ inputs.data_type == 'cv' }}
+        env:
+          USER_ID: ${{ secrets.USER_ID }}
+          USER_PASS: ${{ secrets.USER_PASS }}
+          GCP_JSON: ${{ secrets.GCP_JSON }}
+          TARGET_URL: ${{ secrets.CV_TARGET_URL }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          PARTNER_NAME: ${{ secrets.PARTNER_NAME }}
+        run: python scraper/backfill.py cv "${{ inputs.start_date }}" "${{ inputs.end_date }}"
