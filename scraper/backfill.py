@@ -200,7 +200,7 @@ def main():
             webdriver.ActionChains(driver).send_keys(Keys.ENTER).perform()
 
         print("検索結果を待機中...")
-        time.sleep(20)
+        time.sleep(45)
 
         # 7. CSVダウンロード
         print("CSVボタンを押します...")
