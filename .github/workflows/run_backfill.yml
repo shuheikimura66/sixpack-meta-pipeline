@@ -1,0 +1,42 @@
+name: Backfill MCV & CV
+
+on:
+  workflow_dispatch:
+    inputs:
+      data_type:
+        description: 'mcv or cv'
+        required: true
+        default: 'mcv'
+      start_date:
+        description: 'Start date (e.g. 2026年01月01日)'
+        required: true
+      end_date:
+        description: 'End date (e.g. 2026年04月01日)'
+        required: true
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install selenium webdriver-manager google-api-python-client google-auth
+      - name: Run backfill
+        env:
+          USER_ID: ${{ secrets.USER_ID }}
+          USER_PASS: ${{ secrets.USER_PASS }}
+          GCP_JSON: ${{ secrets.GCP_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          PARTNER_NAME: ${{ secrets.PARTNER_NAME }}
+        run: |
+          if [ "${{ inputs.data_type }}" = "mcv" ]; then
+            TARGET_URL="${{ secrets.MCV_TARGET_URL }}"
+          else
+            TARGET_URL="${{ secrets.CV_TARGET_URL }}"
+          fi
+          export TARGET_URL
+          python scraper/backfill.py "${{ inputs.data_type }}" "$TARGET_URL" "${{ inputs.start_date }}" "${{ inputs.end_date }}"
