@@ -200,14 +200,16 @@ def main():
             webdriver.ActionChains(driver).send_keys(Keys.ENTER).perform()
 
         print("検索結果を待機中...")
-        time.sleep(45)
+        time.sleep(90)
 
         # 7. CSVダウンロード
         print("CSVボタンを押します...")
         try:
-            csv_btn = wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'CSV') or @value='CSV作成' or @value='CSV生成']")))
+            # 長めに待機してからボタン検出
+            long_wait = WebDriverWait(driver, 120)
+            csv_btn = long_wait.until(EC.element_to_be_clickable((By.XPATH, "//*[contains(text(), 'CSV') or @value='CSV作成' or @value='CSV生成']")))
             driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", csv_btn)
-            time.sleep(1)
+            time.sleep(2)
             driver.execute_script("arguments[0].click();", csv_btn)
         except Exception as e:
             print(f"CSVボタンエラー: {e}")
