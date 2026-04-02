@@ -1,0 +1,20 @@
+name: Notion抽出条件 → 好調クリエイティブ自動投稿
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests google-cloud-bigquery google-auth
+      - run: python scraper/notion_extract.py
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          GCP_JSON: ${{ secrets.GCP_JSON }}
