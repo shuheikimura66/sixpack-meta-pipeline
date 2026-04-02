@@ -36,7 +36,7 @@ def fetch_extraction_conditions():
     payload = {
         "filter": {
             "property": "ステータス",
-            "select": {"equals": "実行中"}
+            "select": {"equals": "待機中"}
         }
     }
     resp = requests.post(url, headers=NOTION_HEADERS, json=payload)
@@ -188,6 +188,7 @@ def main():
         print(f"  アカウント: {cond['account_name'] or '全アカウント'}")
         
         try:
+            update_status(cond["page_id"], "実行中")
             rows = query_bq(cond)
             if rows:
                 posted = post_to_creative_db(rows, cond["name"])
