@@ -2,12 +2,11 @@ import os
 import json
 import time
 import glob
-import csv
 import sys
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
+from google.cloud import storage, bigquery
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -22,64 +21,65 @@ USER_ID = os.environ["USER_ID"]
 PASSWORD = os.environ["USER_PASS"]
 json_creds = json.loads(os.environ["GCP_JSON"])
 TARGET_URL = os.environ["TARGET_URL"]
-SPREADSHEET_ID = os.environ["SPREADSHEET_ID"]
 PARTNER_NAME = os.environ["PARTNER_NAME"]
 
+# --- GCP設定 ---
+PROJECT_ID = 'gen-lang-client-0904675126'
+DATASET_ID = 'meta_ads_v2'
+BUCKET_NAME = 'gen-lang-client-0904675126-backfill'
+
 # --- コマンドライン引数 ---
-# Usage: python backfill.py <mcv|cv> <start_date> <end_date>
-# Example: python backfill.py mcv 2026年01月01日 2026年01月31日
 DATA_TYPE = sys.argv[1]  # "mcv" or "cv"
 START_DATE = sys.argv[2]
 END_DATE = sys.argv[3]
 
-SHEET_NAME = f"{DATA_TYPE}_backfill"
+TABLE_MAP = {
+    "mcv": "mcv_fixed",
+    "cv": "cv_fixed"
+}
+TABLE_ID = TABLE_MAP.get(DATA_TYPE)
 
-def get_google_service(service_name, version):
-    scopes = ['https://www.googleapis.com/auth/spreadsheets']
-    creds = Credentials.from_service_account_info(json_creds, scopes=scopes)
-    return build(service_name, version, credentials=creds)
+def get_gcp_credentials():
+    return Credentials.from_service_account_info(json_creds)
 
-def update_google_sheet(csv_path):
-    print(f"スプレッドシートへの転記を開始: {SHEET_NAME}")
-    service = get_google_service('sheets', 'v4')
-
-    csv_data = []
-    try:
-        with open(csv_path, 'r', encoding='utf-8') as f:
-            reader = csv.reader(f)
-            csv_data = list(reader)
-    except UnicodeDecodeError:
-        print("UTF-8失敗。Shift_JIS(CP932)で再試行します。")
-        with open(csv_path, 'r', encoding='cp932') as f:
-            reader = csv.reader(f)
-            csv_data = list(reader)
-
-    if not csv_data:
-        print("CSVデータが空のため転記をスキップします。")
-        return
-
-    try:
-        service.spreadsheets().values().clear(
-            spreadsheetId=SPREADSHEET_ID,
-            range=SHEET_NAME
-        ).execute()
-    except Exception as e:
-        print(f"シートクリアエラー: {e}")
-
-    body = {'values': csv_data}
-    try:
-        result = service.spreadsheets().values().update(
-            spreadsheetId=SPREADSHEET_ID,
-            range=f"{SHEET_NAME}!A1",
-            valueInputOption='USER_ENTERED',
-            body=body
-        ).execute()
-        print(f"スプレッドシート更新完了: {result.get('updatedCells')} セル更新")
-    except Exception as e:
-        print(f"書き込みエラー: {e}")
+def upload_to_gcs_and_load_bq(csv_path):
+    """CSVをGCSにアップロードしてBQにロード"""
+    creds = get_gcp_credentials()
+    
+    # 1. GCSにアップロード
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    blob_name = f"backfill/{DATA_TYPE}_{timestamp}.csv"
+    
+    print(f"GCSにアップロード中: gs://{BUCKET_NAME}/{blob_name}")
+    storage_client = storage.Client(project=PROJECT_ID, credentials=creds)
+    bucket = storage_client.bucket(BUCKET_NAME)
+    blob = bucket.blob(blob_name)
+    blob.upload_from_filename(csv_path)
+    print("GCSアップロード完了")
+    
+    # 2. BQにロード
+    print(f"BigQueryにロード中: {DATASET_ID}.{TABLE_ID}")
+    bq_client = bigquery.Client(project=PROJECT_ID, credentials=creds)
+    
+    table_ref = bq_client.dataset(DATASET_ID).table(TABLE_ID)
+    
+    job_config = bigquery.LoadJobConfig(
+        source_format=bigquery.SourceFormat.CSV,
+        skip_leading_rows=1,
+        autodetect=True,
+        write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
+        max_bad_records=10,
+        encoding='SHIFT_JIS'
+    )
+    
+    uri = f"gs://{BUCKET_NAME}/{blob_name}"
+    load_job = bq_client.load_table_from_uri(uri, table_ref, job_config=job_config)
+    load_job.result()  # 完了まで待機
+    
+    print(f"BQロード完了: {load_job.output_rows} 行")
 
 def run_mcv_backfill():
-    """MCVバックフィル - mcv_main.pyと同じ動線"""
+    """MCVバックフィル"""
     date_range_str = f"{START_DATE} - {END_DATE}"
     print(f"=== MCVバックフィル開始 (期間: {date_range_str}) ===")
 
@@ -201,8 +201,8 @@ def run_mcv_backfill():
         csv_file_path = files[0]
         print(f"ダウンロード成功: {csv_file_path}")
 
-        # 7. スプレッドシートへ転記
-        update_google_sheet(csv_file_path)
+        # 7. GCS→BQ直接ロード
+        upload_to_gcs_and_load_bq(csv_file_path)
 
     except Exception as e:
         print(f"【エラー発生】: {e}")
@@ -212,7 +212,7 @@ def run_mcv_backfill():
         driver.quit()
 
 def run_cv_backfill():
-    """CVバックフィル - cv_main.pyと同じ動線"""
+    """CVバックフィル"""
     print(f"=== CVバックフィル開始 (期間: {START_DATE} - {END_DATE}) ===")
 
     download_dir = os.path.join(os.getcwd(), "downloads_cv")
@@ -363,8 +363,8 @@ def run_cv_backfill():
         csv_file_path = files[0]
         print(f"ダウンロード成功: {csv_file_path}")
 
-        # 7. スプレッドシートへ転記
-        update_google_sheet(csv_file_path)
+        # 7. GCS→BQ直接ロード
+        upload_to_gcs_and_load_bq(csv_file_path)
 
     except Exception as e:
         print(f"【エラー発生】: {e}")
