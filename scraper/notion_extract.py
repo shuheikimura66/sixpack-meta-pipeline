@@ -176,27 +176,39 @@ def update_status(page_id, status_name):
 
 def reset_stuck_conditions():
     """10分以上『実行中』のまま止まっている条件を『待機中』にリセット"""
-    from datetime import datetime, timezone
-    url = f"https://api.notion.com/v1/databases/{EXTRACTION_DB_ID}/query"
-    payload = {
-        "filter": {
-            "property": "ステータス",
-            "select": {"equals": "実行中"}
+    from datetime import datetime, timezone as tz
+    print("  [リセットチェック] 実行中の条件を確認中...")
+    try:
+        url = f"https://api.notion.com/v1/databases/{EXTRACTION_DB_ID}/query"
+        payload = {
+            "filter": {
+                "property": "ステータス",
+                "select": {"equals": "実行中"}
+            }
         }
-    }
-    resp = requests.post(url, headers=NOTION_HEADERS, json=payload)
-    resp.raise_for_status()
-    for page in resp.json().get("results", []):
-        last_edited = page.get("last_edited_time", "")
-        if last_edited:
-            edited_dt = datetime.fromisoformat(last_edited.replace("Z", "+00:00"))
-            elapsed = (datetime.now(timezone.utc) - edited_dt).total_seconds()
-            if elapsed > 600:  # 10分 = 600秒
-                page_id = page["id"]
-                title_arr = page["properties"].get("Name", {}).get("title", [])
-                name = title_arr[0]["plain_text"] if title_arr else "不明"
-                print(f"  リセット: 「{name}」が{int(elapsed//60)}分間『実行中』のためリセット")
+        resp = requests.post(url, headers=NOTION_HEADERS, json=payload)
+        resp.raise_for_status()
+        pages = resp.json().get("results", [])
+        print(f"  [リセットチェック] 『実行中』の条件: {len(pages)}件")
+        for page in pages:
+            last_edited = page.get("last_edited_time", "")
+            page_id = page["id"]
+            title_arr = page["properties"].get("Name", {}).get("title", [])
+            name = title_arr[0]["plain_text"] if title_arr else "不明"
+            if last_edited:
+                edited_dt = datetime.fromisoformat(last_edited.replace("Z", "+00:00"))
+                elapsed = (datetime.now(tz.utc) - edited_dt).total_seconds()
+                print(f"  [リセットチェック] 「{name}」最終更新: {last_edited}, 経過: {int(elapsed)}秒")
+                if elapsed > 600:
+                    print(f"  リセット: 「{name}」が{int(elapsed//60)}分間『実行中』のためリセット")
+                    update_status(page_id, "待機中")
+                else:
+                    print(f"  [リセットチェック] 「{name}」はまだ{int(elapsed)}秒なのでスキップ")
+            else:
+                print(f"  [リセットチェック] 「{name}」last_edited_timeが空のためリセット")
                 update_status(page_id, "待機中")
+    except Exception as e:
+        print(f"  [リセットチェック] エラー: {e}")
 
 def main():
     print("=== Notion抽出条件 → BQ → 好調クリエイティブ 自動投稿 ===")
