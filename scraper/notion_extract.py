@@ -36,7 +36,7 @@ def fetch_extraction_conditions():
     payload = {
         "filter": {
             "property": "ステータス",
-            "select": {"equals": "待機中"}
+            "select": {"equals": "実行中"}
         }
     }
     resp = requests.post(url, headers=NOTION_HEADERS, json=payload)
