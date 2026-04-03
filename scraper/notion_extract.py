@@ -98,7 +98,8 @@ def query_bq(condition):
       SAFE_DIVIDE(SUM(spend), SUM(approved_count)) AS cpa,
       SAFE_DIVIDE(SUM(mcv_clicks), SUM(meta_clicks)) AS mcvr,
       SAFE_DIVIDE(SUM(approved_count), SUM(mcv_clicks)) AS cvr,
-      SAFE_DIVIDE(SUM(meta_clicks), SUM(impressions)) AS ctr
+      SAFE_DIVIDE(SUM(meta_clicks), SUM(impressions)) AS ctr,
+      COALESCE(ANY_VALUE(video_id), '') AS video_id
     FROM `{BQ_VIEW}`
     WHERE {where_sql}
     GROUP BY ad_name, url_key
@@ -148,6 +149,8 @@ def post_to_creative_db(rows, condition_name):
         # LP URLがあれば追加
         if row.landing_url:
             payload["properties"]["LP URL"] = {"url": str(row.landing_url)}
+        if row.video_id:
+            payload["properties"]["動画URL"] = {"url": f"https://asia-northeast1-gen-lang-client-0904675126.cloudfunctions.net/video-proxy?video_id={row.video_id}"}
         
         resp = requests.post(url, headers=NOTION_HEADERS, json=payload)
         if resp.status_code == 200:
@@ -171,8 +174,35 @@ def update_status(page_id, status_name):
     resp.raise_for_status()
     print(f"  ステータスを「{status_name}」に更新")
 
+def reset_stuck_conditions():
+    """10分以上『実行中』のまま止まっている条件を『待機中』にリセット"""
+    from datetime import datetime, timezone
+    url = f"https://api.notion.com/v1/databases/{EXTRACTION_DB_ID}/query"
+    payload = {
+        "filter": {
+            "property": "ステータス",
+            "select": {"equals": "実行中"}
+        }
+    }
+    resp = requests.post(url, headers=NOTION_HEADERS, json=payload)
+    resp.raise_for_status()
+    for page in resp.json().get("results", []):
+        last_edited = page.get("last_edited_time", "")
+        if last_edited:
+            edited_dt = datetime.fromisoformat(last_edited.replace("Z", "+00:00"))
+            elapsed = (datetime.now(timezone.utc) - edited_dt).total_seconds()
+            if elapsed > 600:  # 10分 = 600秒
+                page_id = page["id"]
+                title_arr = page["properties"].get("Name", {}).get("title", [])
+                name = title_arr[0]["plain_text"] if title_arr else "不明"
+                print(f"  リセット: 「{name}」が{int(elapsed//60)}分間『実行中』のためリセット")
+                update_status(page_id, "待機中")
+
 def main():
     print("=== Notion抽出条件 → BQ → 好調クリエイティブ 自動投稿 ===")
+    
+    # 実行中のまま止まっている条件をリセット
+    reset_stuck_conditions()
     
     conditions = fetch_extraction_conditions()
     print(f"実行中の抽出条件: {len(conditions)}件")

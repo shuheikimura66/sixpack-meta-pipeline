@@ -2,7 +2,7 @@ name: Notion抽出条件 → 好調クリエイティブ自動投稿
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '* * * * *'
   workflow_dispatch:
 
 jobs:
