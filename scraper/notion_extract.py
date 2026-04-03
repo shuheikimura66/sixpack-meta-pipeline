@@ -199,7 +199,7 @@ def reset_stuck_conditions():
                 edited_dt = datetime.fromisoformat(last_edited.replace("Z", "+00:00"))
                 elapsed = (datetime.now(tz.utc) - edited_dt).total_seconds()
                 print(f"  [リセットチェック] 「{name}」最終更新: {last_edited}, 経過: {int(elapsed)}秒")
-                if elapsed > 600:
+                if elapsed > 120:  # 2分
                     print(f"  リセット: 「{name}」が{int(elapsed//60)}分間『実行中』のためリセット")
                     update_status(page_id, "待機中")
                 else:
