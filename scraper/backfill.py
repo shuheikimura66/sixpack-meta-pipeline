@@ -3,6 +3,9 @@ import json
 import time
 import glob
 import sys
+import re
+import csv
+import io
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from google.oauth2.service_account import Credentials
@@ -39,72 +42,118 @@ TABLE_MAP = {
 }
 TABLE_ID = TABLE_MAP.get(DATA_TYPE)
 
+# --- フィルタ設定 ---
+FILTER_MAP = {
+    "mcv": {"column": "ステータス", "value": "クリック"},
+    "cv":  {"column": "ステータス", "value": "承認"}
+}
+
 def get_gcp_credentials():
     return Credentials.from_service_account_info(json_creds)
 
 def upload_to_gcs_and_load_bq(csv_path):
-    """CSVをGCSにアップロードしてBQにロード"""
+    """CSVをフィルタしてGCSにアップロードしBQにロード"""
     creds = get_gcp_credentials()
-    
-    # 1. GCSにアップロード
+
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     blob_name = f"backfill/{DATA_TYPE}_{timestamp}.csv"
-    
-    # Shift-JISをUTF-8に変換し、ヘッダーをBQ互換に修正
-    import re
-    utf8_path = csv_path + ".utf8.csv"
+
+    # 1. CSV読み込み（Shift-JIS or UTF-8）
     try:
         with open(csv_path, 'r', encoding='cp932') as f_in:
-            lines = f_in.readlines()
+            raw_lines = f_in.readlines()
     except UnicodeDecodeError:
         with open(csv_path, 'r', encoding='utf-8') as f_in:
-            lines = f_in.readlines()
-    
-    if lines:
-        # ヘッダー行のBQ非対応文字を_に置換
-        import re
-        header = lines[0]
-        header = header.replace('/', '_')
-        header = header.replace('(', '_')
-        header = header.replace(')', '_')
-        header = header.replace(' ', '_')
-        header = header.replace('-', '_')
-        header = header.replace('.', '_')
-        # 連続する_を1つに
-        header = re.sub(r'_+', '_', header)
-        # 末尾の_を除去
-        header = re.sub(r'_"', '"', header)
-        header = re.sub(r'_,', ',', header)
-        lines[0] = header
-    
+            raw_lines = f_in.readlines()
+
+    if not raw_lines:
+        print("【エラー】CSVが空です")
+        return
+
+    # 2. ヘッダー修正（BQ互換）
+    header = raw_lines[0]
+    header = header.replace('/', '_')
+    header = header.replace('(', '_')
+    header = header.replace(')', '_')
+    header = header.replace(' ', '_')
+    header = header.replace('-', '_')
+    header = header.replace('.', '_')
+    header = re.sub(r'_+', '_', header)
+    header = re.sub(r'_"', '"', header)
+    header = re.sub(r'_,', ',', header)
+
+    # 3. ヘッダーからフィルタ列のインデックスを取得
+    header_reader = csv.reader(io.StringIO(header))
+    header_cols = next(header_reader)
+
+    filter_conf = FILTER_MAP.get(DATA_TYPE)
+    filter_col_name = filter_conf["column"]
+    filter_value = filter_conf["value"]
+
+    filter_idx = None
+    for i, col in enumerate(header_cols):
+        col_clean = col.strip().strip('"')
+        if col_clean == filter_col_name or col_clean == filter_col_name.replace(' ', '_'):
+            filter_idx = i
+            break
+
+    if filter_idx is None:
+        print(f"【警告】フィルタ列 '{filter_col_name}' が見つかりません。列一覧: {header_cols}")
+        print("フィルタなしでロードします")
+        filtered_lines = [header] + raw_lines[1:]
+    else:
+        print(f"フィルタ: 列[{filter_idx}] '{header_cols[filter_idx]}' = '{filter_value}'")
+        filtered_lines = [header]
+        total_data = 0
+        matched = 0
+        for line in raw_lines[1:]:
+            total_data += 1
+            row_reader = csv.reader(io.StringIO(line))
+            try:
+                row = next(row_reader)
+                if len(row) > filter_idx:
+                    cell = row[filter_idx].strip().strip('"')
+                    if cell == filter_value:
+                        filtered_lines.append(line)
+                        matched += 1
+            except StopIteration:
+                continue
+        print(f"フィルタ適用: {total_data}行 → {matched}行")
+
+    # 4. UTF-8 CSVとして書き出し
+    utf8_path = csv_path + ".utf8.csv"
     with open(utf8_path, 'w', encoding='utf-8', newline='') as f_out:
-        f_out.writelines(lines)
-    
+        f_out.writelines(filtered_lines)
+
+    # 5. GCSにアップロード
     print(f"GCSにアップロード中: gs://{BUCKET_NAME}/{blob_name}")
     storage_client = storage.Client(project=PROJECT_ID, credentials=creds)
     bucket = storage_client.bucket(BUCKET_NAME)
     blob = bucket.blob(blob_name)
     blob.upload_from_filename(utf8_path)
     print("GCSアップロード完了")
-    
-    # 2. BQにロード
+
+    # 6. BQにロード
     print(f"BigQueryにロード中: {DATASET_ID}.{TABLE_ID}")
     bq_client = bigquery.Client(project=PROJECT_ID, credentials=creds)
-    
+
     table_ref = bq_client.dataset(DATASET_ID).table(TABLE_ID)
-    
+
     job_config = bigquery.LoadJobConfig(
         source_format=bigquery.SourceFormat.CSV,
         skip_leading_rows=1,
         autodetect=True,
         write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
         max_bad_records=10,
+        schema_update_options=[
+            bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION
+        ],
     )
-    
+
     uri = f"gs://{BUCKET_NAME}/{blob_name}"
     load_job = bq_client.load_table_from_uri(uri, table_ref, job_config=job_config)
-    load_job.result()  # 完了まで待機
-    
+    load_job.result()
+
     print(f"BQロード完了: {load_job.output_rows} 行")
 
 def run_mcv_backfill():
@@ -230,7 +279,7 @@ def run_mcv_backfill():
         csv_file_path = files[0]
         print(f"ダウンロード成功: {csv_file_path}")
 
-        # 7. GCS→BQ直接ロード
+        # 7. GCS→BQ直接ロード（フィルタ付き）
         upload_to_gcs_and_load_bq(csv_file_path)
 
     except Exception as e:
@@ -392,7 +441,7 @@ def run_cv_backfill():
         csv_file_path = files[0]
         print(f"ダウンロード成功: {csv_file_path}")
 
-        # 7. GCS→BQ直接ロード
+        # 7. GCS→BQ直接ロード（フィルタ付き）
         upload_to_gcs_and_load_bq(csv_file_path)
 
     except Exception as e:
